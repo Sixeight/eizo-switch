@@ -1,5 +1,5 @@
 use std::{
-    process::Command,
+    process::{Child, Command},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -144,17 +144,18 @@ struct Cli {
     before: Option<String>,
 }
 
-/// Returns whether `command` ran and exited successfully within `timeout`.
-/// A command that overruns is killed.
-fn run_before(command: &str, timeout: Duration) -> bool {
-    let Ok(mut child) = Command::new("sh").args(["-c", command]).spawn() else {
-        return false;
-    };
-    let deadline = Instant::now() + timeout;
+/// Starts `command` in the background. Returns `None` when it cannot be started.
+fn spawn_before(command: &str) -> Option<Child> {
+    Command::new("sh").args(["-c", command]).spawn().ok()
+}
+
+/// Waits for `child` until `deadline` and kills it on overrun.
+/// Returns whether it exited successfully in time.
+fn wait_before(child: &mut Child, deadline: Instant) -> bool {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return status.success(),
-            Ok(None) if Instant::now() < deadline => sleep(Duration::from_millis(50)),
+            Ok(None) if Instant::now() < deadline => sleep(Duration::from_millis(20)),
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -166,14 +167,25 @@ fn run_before(command: &str, timeout: Duration) -> bool {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    // Run before opening the HID device so a slow command never holds it.
-    if let Some(command) = &cli.before {
-        if !run_before(command, BEFORE_TIMEOUT) {
+    // The command runs in the background while the switch happens, so a slow
+    // command such as ssh does not delay the switch.
+    let before = cli.before.as_deref().map(|command| {
+        let deadline = Instant::now() + BEFORE_TIMEOUT;
+        (command, spawn_before(command), deadline)
+    });
+    let result = run(&cli);
+    if let Some((command, child, deadline)) = before {
+        let succeeded = child.is_some_and(|mut child| wait_before(&mut child, deadline));
+        if !succeeded {
             eprintln!("warning: --before command failed or timed out: {command}");
         }
     }
+    result
+}
+
+fn run(cli: &Cli) -> Result<()> {
     let dev = open()?;
-    match cli.input {
+    match &cli.input {
         None => {
             let code = get_value(&dev, ID_INPUT_SOURCE)?;
             match Input::from_code(code) {
@@ -182,7 +194,7 @@ fn main() -> Result<()> {
             }
         }
         Some(name) => {
-            let input = Input::parse(&name)
+            let input = Input::parse(name)
                 .with_context(|| format!("unknown input {name:?} (dp, usb-c, hdmi1, hdmi2)"))?;
             set_value(&dev, ID_INPUT_SOURCE, input.code())?;
         }
@@ -193,6 +205,11 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_before(command: &str, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        spawn_before(command).is_some_and(|mut child| wait_before(&mut child, deadline))
+    }
 
     #[test]
     fn test_set_request_matches_known_protocol_bytes() {
