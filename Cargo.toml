@@ -1,0 +1,17 @@
+[package]
+name = "eizo-switch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Switch the input of an EIZO EV3895 over USB HID"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+hidapi = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
