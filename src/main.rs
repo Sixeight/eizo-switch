@@ -1,4 +1,8 @@
-use std::{process::Command, thread::sleep, time::Duration};
+use std::{
+    process::Command,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -7,6 +11,7 @@ use hidapi::{HidApi, HidDevice};
 const VENDOR_ID: u16 = 0x056d;
 const EV3895_PRODUCT_ID: u16 = 0x4065;
 const REPORT_LEN: usize = 40;
+const BEFORE_TIMEOUT: Duration = Duration::from_secs(10);
 const ID_INPUT_SOURCE: u16 = 0x48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,17 +144,34 @@ struct Cli {
     before: Option<String>,
 }
 
-/// Returns whether `command` ran and exited successfully.
-fn run_before(command: &str) -> bool {
-    Command::new("sh")
-        .args(["-c", command])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+/// Returns whether `command` ran and exited successfully within `timeout`.
+/// A command that overruns is killed.
+fn run_before(command: &str, timeout: Duration) -> bool {
+    let Ok(mut child) = Command::new("sh").args(["-c", command]).spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Run before opening the HID device so a slow command never holds it.
+    if let Some(command) = &cli.before {
+        if !run_before(command, BEFORE_TIMEOUT) {
+            eprintln!("warning: --before command failed or timed out: {command}");
+        }
+    }
     let dev = open()?;
     match cli.input {
         None => {
@@ -162,11 +184,6 @@ fn main() -> Result<()> {
         Some(name) => {
             let input = Input::parse(&name)
                 .with_context(|| format!("unknown input {name:?} (dp, usb-c, hdmi1, hdmi2)"))?;
-            if let Some(command) = &cli.before {
-                if !run_before(command) {
-                    eprintln!("warning: --before command failed: {command}");
-                }
-            }
             set_value(&dev, ID_INPUT_SOURCE, input.code())?;
         }
     }
@@ -203,9 +220,17 @@ mod tests {
 
     #[test]
     fn test_run_before_reports_exit_status() {
-        assert!(run_before("true"));
-        assert!(!run_before("false"));
-        assert!(!run_before("exit 3"));
+        let long = Duration::from_secs(5);
+        assert!(run_before("true", long));
+        assert!(!run_before("false", long));
+        assert!(!run_before("exit 3", long));
+    }
+
+    #[test]
+    fn test_run_before_kills_a_command_that_overruns() {
+        let started = Instant::now();
+        assert!(!run_before("sleep 5", Duration::from_millis(200)));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

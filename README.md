@@ -20,13 +20,15 @@ If the target PC's display is asleep, the screen stays dark until it wakes. `--b
 
 ```
 # macOS -> Linux (Hyprland)
-eizo-switch dp --before 'ssh linux-host "HYPRLAND_INSTANCE_SIGNATURE=\$(ls /run/user/\$(id -u)/hypr | head -1) hyprctl dispatch \"hl.dsp.dpms({ action = \\\"on\\\" })\""'
+eizo-switch dp --before 'ssh -n -o BatchMode=yes -o ConnectTimeout=3 linux-host "HYPRLAND_INSTANCE_SIGNATURE=\$(ls /run/user/\$(id -u)/hypr | head -1) hyprctl dispatch \"hl.dsp.dpms({ action = \\\"on\\\" })\""'
 
 # Linux -> macOS
-eizo-switch usb-c --before 'ssh mac-host caffeinate -u -t 2'
+eizo-switch usb-c --before 'ssh -n -o BatchMode=yes -o ConnectTimeout=3 mac-host caffeinate -u -t 2'
 ```
 
-A failing `--before` command prints a warning and the switch still happens.
+`--before` runs before the HID device is opened and is killed after 10 seconds. A failing or timed-out command prints a warning and the switch still happens.
+
+If ssh asks for authentication each time (for example with a password-manager agent), reuse one connection with `ControlMaster auto`, `ControlPath` and `ControlPersist` in `~/.ssh/config`. A launcher without a terminal cannot answer a prompt, so `BatchMode=yes` makes ssh fail instead of waiting.
 
 ## Install
 
