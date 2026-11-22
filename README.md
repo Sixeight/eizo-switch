@@ -14,6 +14,20 @@ eizo-switch usb-c    # switch to USB-C
 
 The monitor's built-in KVM moves its USB hub to whichever PC owns the active input. The monitor is therefore reachable only from the PC that currently has the input. After switching away, the command may print a "not ready" error. This is expected. Switch back from the other PC.
 
+## Waking the target display
+
+If the target PC's display is asleep, the screen stays dark until it wakes. `--before` runs a shell command first, so you can wake the target as you switch:
+
+```
+# macOS -> Linux (Hyprland)
+eizo-switch dp --before 'ssh linux-host "HYPRLAND_INSTANCE_SIGNATURE=\$(ls /run/user/\$(id -u)/hypr | head -1) hyprctl dispatch \"hl.dsp.dpms({ action = \\\"on\\\" })\""'
+
+# Linux -> macOS
+eizo-switch usb-c --before 'ssh mac-host caffeinate -u -t 2'
+```
+
+A failing `--before` command prints a warning and the switch still happens.
+
 ## Install
 
 ```

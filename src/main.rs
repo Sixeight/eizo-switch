@@ -1,4 +1,4 @@
-use std::{thread::sleep, time::Duration};
+use std::{process::Command, thread::sleep, time::Duration};
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -132,6 +132,20 @@ fn open() -> Result<HidDevice> {
 struct Cli {
     /// Input to switch to: dp, usb-c, hdmi1, hdmi2. Omit to print the current input.
     input: Option<String>,
+
+    /// Shell command to run before switching, for example to wake the target PC's display.
+    /// A failure is reported and the switch continues.
+    #[arg(long, value_name = "COMMAND", requires = "input")]
+    before: Option<String>,
+}
+
+/// Returns whether `command` ran and exited successfully.
+fn run_before(command: &str) -> bool {
+    Command::new("sh")
+        .args(["-c", command])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 fn main() -> Result<()> {
@@ -148,6 +162,11 @@ fn main() -> Result<()> {
         Some(name) => {
             let input = Input::parse(&name)
                 .with_context(|| format!("unknown input {name:?} (dp, usb-c, hdmi1, hdmi2)"))?;
+            if let Some(command) = &cli.before {
+                if !run_before(command) {
+                    eprintln!("warning: --before command failed: {command}");
+                }
+            }
             set_value(&dev, ID_INPUT_SOURCE, input.code())?;
         }
     }
@@ -180,6 +199,13 @@ mod tests {
         assert!(check_ack(&ack, &sent).is_ok());
         ack[3] = 0x49;
         assert!(check_ack(&ack, &sent).is_err());
+    }
+
+    #[test]
+    fn test_run_before_reports_exit_status() {
+        assert!(run_before("true"));
+        assert!(!run_before("false"));
+        assert!(!run_before("exit 3"));
     }
 
     #[test]
